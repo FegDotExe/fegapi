@@ -1,6 +1,6 @@
 import logging
 import os, sys
-from re import search, sub
+from re import search, sub, findall
 from inspect import getframeinfo, stack
 
 class Logger():
@@ -17,26 +17,42 @@ class DynamicObject():
     custom_size=None
     updated=False
     offset_pos=None
-    def __init__(self,this_object,current_canvas,nickname=None,proportions=None,custom_size=None,custom_pos=None,offset_pos=None,on_touch=None,object_dict=None):
+    def __init__(self,this_object,current_canvas,current_window=None,nickname=None,proportions=None,custom_size=None,custom_pos=None,offset_pos=None,on_touch=None,object_dict=None,link_with_existing=False):
         """:param this_object: a kivy.graphics object
         :param current_canvas: the widget in which the object is
+        :param current_window: the window in which the object is; is only used for updating the space when an object is linked to an already existing DynamicObject, so when link_with_existing is set to True
         :param str nickname: a name to recognize this object; if not set, is equal to the object's uid
         :param tuple custom_size: a tuple of two functions which define the object's size when the update_space() method is called. Both can be set as None. For more info about functions, see translate_function()
         :param tuple custom_pos: a tuple of two functions which define the object's pos when the update_space() method is called. Both can be set as None. For more info about functions, see translate_function()
         :param proportions: proportions by which the object is downscaled in the format "n:n"
         :param on_touch: a dictionary which says which functions to call if the object is touched in a certain way. Here's an example: {"left":{"call":"a_function()"}}. In order to mention the current object, use "dynamicobject" or "<self>"
         :param object_dict: a dictionary which stores various data about the non-graphical object
+        :param link_with_existing: a bool which determines if a brand new object should be created or instead if it should be linked to an already existing object in the list with the same nickname
         """
-        self.uid=this_object.uid
-        self.object_class=this_object
-        self.nickname=nickname if nickname!=None else this_object.uid
-        self.proportions=proportions if proportions!=None else None
-        self.custom_pos=custom_pos if custom_pos!=None else None
-        self.offset_pos=offset_pos if offset_pos!=None else (None,None)
-        self.custom_size=custom_size if custom_size!=None else None
-        self.on_touch=on_touch if on_touch!=None else None
-        self.object_dict=object_dict if object_dict!=None else None
-        current_canvas.objects_list.append(self)
+        normal_init=True
+        if link_with_existing and nickname!=None:
+            existing_object=self.get_object_class(current_canvas,nickname=nickname)
+            if existing_object!=None:
+                existing_object.object_class=this_object
+                current_canvas.canvas.add(this_object)
+                existing_object.update_space(current_canvas,current_window)
+                existing_object.updated=False
+                normal_init=False
+            else:
+                normal_init=True
+        else:
+            normal_init=True
+        if normal_init:
+            self.uid=this_object.uid
+            self.object_class=this_object
+            self.nickname=nickname if nickname!=None else this_object.uid
+            self.proportions=proportions if proportions!=None else None
+            self.custom_pos=custom_pos if custom_pos!=None else None
+            self.offset_pos=offset_pos if offset_pos!=None else (None,None)
+            self.custom_size=custom_size if custom_size!=None else None
+            self.on_touch=on_touch if on_touch!=None else None
+            self.object_dict=object_dict if object_dict!=None else None
+            current_canvas.objects_list.append(self)
     
     def update_space(self,current_canvas,current_window):
         """Does whatever is needed in order to update an object's spatial properties"""
@@ -107,7 +123,7 @@ class DynamicObject():
         output_value="d_print('Empty touch function')"
         if self.on_touch!=None:
             if touch.button in self.on_touch:
-                output_value="self."+self.on_touch[touch.button]["call"].replace("<self>","dynamicobject")
+                output_value=self.on_touch[touch.button]["call"].replace("<self>","dynamicobject")
         return output_value
 
     def get_object_ind_by_name(self,name,current_canvas):
@@ -119,7 +135,7 @@ class DynamicObject():
                 output_value=i
             i+=1
         return output_value
-    def get_object_class(self,current_canvas,current_window,nickname=None,space_update=False):
+    def get_object_class(self,current_canvas,current_window=None,nickname=None,space_update=False):
         """Returns an object class, found by using the given parameters"""
         output_value=None
         if nickname!=None:
@@ -127,6 +143,16 @@ class DynamicObject():
         if space_update:
             output_value.update_space(current_canvas,current_window)
         return output_value
+
+    def remove_object(self,current_canvas,nickname=None,delete_from_list=False):
+        """Removes an object from the canvas. If delete_from_list is set as True, the object will be also removed from Widget.objects_list, leading to potential errors. If not removed, objects can later be re-linked, gaining the same properties as the actual class, but having a different kivy base object."""
+        if nickname!=None:
+            this_object=self.get_object_class(current_canvas,nickname=nickname)
+        else:
+            this_object=self
+        current_canvas.canvas.remove(this_object.object_class)
+        if delete_from_list:
+            current_canvas.objects_list.remove(self)
 
 def convert_numeric_string(numeric_string:str,total_amount=0):
     """Converts a numeric string to a normal number.
@@ -170,11 +196,12 @@ def translate_function(this_function,axis=0):
     $$extreme(class_object)$$: requires axis index and outputs the right/top border of the object
     
     <<object_nickname>>: refers to the object_class of the dynamic object with given nickname. You can also use <<self>> to refer to the current object
-    Window: automatically replaced with current_window"""
+    $window$: automatically replaced with current_window"""
+    #d_print(this_function)
     output_value=this_function
     last_function=""
     while output_value!=last_function:
-        d_print(output_value)
+        #d_print(output_value)
         last_function=output_value
         output_value=output_value.replace("§§","")
         output_value=output_value.replace("<<self>>","self.object_class")
@@ -182,17 +209,16 @@ def translate_function(this_function,axis=0):
         output_value=sub("\$\$extreme\((.*)\)\$\$","(\g<1>.size[%i]+\g<1>.pos[%i])"%(axis,axis),output_value)
         output_value=output_value.replace("$$center$$","(current_window.size[%i]/2)-(self.object_class.size[%i]/2)"%(axis,axis)) if "$$center$$"in output_value else output_value
         output_value=sub("\$\$(\-?\d*)/(\d*)\$\$","(int(\g<1>)*current_window.size[%i])/int(\g<2>)"%(axis),output_value)
-        output_value=output_value.replace("Window","current_window")
+        output_value=output_value.replace("$window$","current_window")
     if ("$$" in last_function or "<<" in last_function) or ("$$" in last_function and "<<" in last_function):
         w_print("Unparsable function string: '%s'"%(last_function))
     #d_print(output_value)
     return output_value
 def function_add(base_function,value):
-    """Sums given value to the first value between "§§" in the base_function
+    """Sums given value to all the values between "§§" in the base_function
     
     Example: function_add("§§10§§/100",10) outputs "§§20§§/100" """
     output_value=base_function
-    base_search=search("§§(\-?\d*)§§",str(base_function))
-    if base_search!=None:
-        output_value=sub("§§(\-?\d*)§§","§§%i§§"%(int(base_search.group(1))+value),output_value)
+    for base_search in findall("§§(\-?\d*)§§",str(output_value)):
+        output_value=sub("§§(\-?\d*)§§","§§%i§§"%(int(base_search)+value),output_value)
     return output_value
