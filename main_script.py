@@ -15,9 +15,11 @@ class DynamicObject():
     nickname=None
     custom_pos=None
     custom_size=None
+    custom_text_size=None
     updated=False
     offset_pos=None
-    def __init__(self,this_object,current_canvas,current_window=None,nickname=None,proportions=None,custom_size=None,custom_pos=None,offset_pos=None,on_touch=None,object_dict=None,link_with_existing=False):
+    active=True
+    def __init__(self,this_object,current_canvas,current_window=None,nickname=None,proportions=None,custom_size=None,custom_pos=None,offset_pos=None,on_touch=None,object_dict=None,link_with_existing=False,priority=0,custom_text_size=None):
         """:param this_object: a kivy.graphics object
         :param current_canvas: the widget in which the object is
         :param current_window: the window in which the object is; is only used for updating the space when an object is linked to an already existing DynamicObject, so when link_with_existing is set to True
@@ -28,15 +30,21 @@ class DynamicObject():
         :param on_touch: a dictionary which says which functions to call if the object is touched in a certain way. Here's an example: {"left":{"call":"a_function()"}}. In order to mention the current object, use "dynamicobject" or "<self>"
         :param object_dict: a dictionary which stores various data about the non-graphical object
         :param link_with_existing: a bool which determines if a brand new object should be created or instead if it should be linked to an already existing object in the list with the same nickname
+        :param int priority: in which order the object is drawn. High values means object visible on the top
+        :param custom_text_size: a tuple of functions which determine the size of the text of a kivy.uix.label.Label class. It is recommended to set kivy.uix.label.Label.strip to True
         """
+        #TODO: make nicknames mandatory and unique
+        #TODO: add a way for labels to customize their text size
         normal_init=True
         if link_with_existing and nickname!=None:
             existing_object=self.get_object_class(current_canvas,nickname=nickname)
             if existing_object!=None:
                 existing_object.object_class=this_object
                 current_canvas.canvas.add(this_object)
+                existing_object.active=True
                 existing_object.update_space(current_canvas,current_window)
                 existing_object.updated=False
+                reorder_objects(current_canvas)
                 normal_init=False
             else:
                 normal_init=True
@@ -52,15 +60,21 @@ class DynamicObject():
             self.custom_size=custom_size if custom_size!=None else None
             self.on_touch=on_touch if on_touch!=None else None
             self.object_dict=object_dict if object_dict!=None else None
+            self.priority=priority if priority!=None else 0
+            if str(type(self.object_class))=="<class 'kivy.uix.label.Label'>":
+                self.custom_text_size=custom_text_size if custom_text_size!=None else None
+            #TODO: also add a property for custom font size
+
             current_canvas.objects_list.append(self)
     
     def update_space(self,current_canvas,current_window):
-        """Does whatever is needed in order to update an object's spatial properties"""
-        if not self.updated:
-            self.update_size(current_canvas,current_window)
-            self.update_pos(current_canvas,current_window)
-            d_print("Space updated for object %s; size(%i,%i); pos(%i,%i)"%(self.nickname,self.object_class.size[0],self.object_class.size[1],self.object_class.pos[0],self.object_class.pos[1]))
-        self.updated=True
+        """Does whatever is needed in order to update an object's spatial properties. Only works if self.active and if not self.updated"""
+        if self.active:
+            if not self.updated:
+                self.update_size(current_canvas,current_window)
+                self.update_pos(current_canvas,current_window)
+                d_print("Space updated for object %s; size(%i,%i); pos(%i,%i)"%(self.nickname,self.object_class.size[0],self.object_class.size[1],self.object_class.pos[0],self.object_class.pos[1]))
+            self.updated=True
     def update_size(self,current_canvas,current_window):
         """Updates object size depending on its properties"""
         size_x=self.object_class.size[0]
@@ -77,6 +91,14 @@ class DynamicObject():
             prop_size=convert_proportion_string(self.proportions,size_x,size_y)
             size_x=prop_size[0]
             size_y=prop_size[1]
+        if self.custom_text_size!=None:
+            text_size_x=self.custom_text_size[0]
+            text_size_y=self.custom_text_size[1]
+            if self.custom_text_size[0]!=None:
+                text_size_x=eval(translate_function(self.custom_text_size[0],axis=0))
+            if self.custom_text_size[1]!=None:
+                text_size_y=eval(translate_function(self.custom_text_size[1],axis=1))
+            self.object_class.text_size=(text_size_x,text_size_y)
         self.object_class.size=(size_x,size_y)
     def update_pos(self,current_canvas,current_window):
         pos_x=self.object_class.pos[0]
@@ -135,6 +157,7 @@ class DynamicObject():
                 output_value=i
             i+=1
         return output_value
+    #BUG: No need to have this as part of the class
     def get_object_class(self,current_canvas,current_window=None,nickname=None,space_update=False):
         """Returns an object class, found by using the given parameters"""
         output_value=None
@@ -153,6 +176,8 @@ class DynamicObject():
         current_canvas.canvas.remove(this_object.object_class)
         if delete_from_list:
             current_canvas.objects_list.remove(self)
+        else:
+            self.active=False
 
 def convert_numeric_string(numeric_string:str,total_amount=0):
     """Converts a numeric string to a normal number.
@@ -198,6 +223,7 @@ def translate_function(this_function,axis=0):
     <<object_nickname>>: refers to the object_class of the dynamic object with given nickname. You can also use <<self>> to refer to the current object
     $window$: automatically replaced with current_window"""
     #d_print(this_function)
+    #TODO: add a $$center()$$ function to refer to the center of another class
     output_value=this_function
     last_function=""
     while output_value!=last_function:
@@ -207,6 +233,7 @@ def translate_function(this_function,axis=0):
         output_value=output_value.replace("<<self>>","self.object_class")
         output_value=sub("<<(.*)>>","self.get_object_class(current_canvas,current_window,nickname=\"\g<1>\",space_update=True).object_class",output_value)
         output_value=sub("\$\$extreme\((.*)\)\$\$","(\g<1>.size[%i]+\g<1>.pos[%i])"%(axis,axis),output_value)
+        output_value=sub("\$\$center\((.*)\)\$\$","((\g<1>.size[%i]/2)+\g<1>.pos[%i])"%(axis,axis),output_value)
         output_value=output_value.replace("$$center$$","(current_window.size[%i]/2)-(self.object_class.size[%i]/2)"%(axis,axis)) if "$$center$$"in output_value else output_value
         output_value=sub("\$\$(\-?\d*)/(\d*)\$\$","(int(\g<1>)*current_window.size[%i])/int(\g<2>)"%(axis),output_value)
         output_value=output_value.replace("$window$","current_window")
@@ -222,3 +249,27 @@ def function_add(base_function,value):
     for base_search in findall("§§(\-?\d*)§§",str(output_value)):
         output_value=sub("§§(\-?\d*)§§","§§%i§§"%(int(base_search)+value),output_value)
     return output_value
+
+def reorder_objects(current_canvas):
+    """Updates all objects respecting their draw priority"""
+    current_list=current_canvas.objects_list[:]
+    for oggetto in current_list:
+        if str(type(oggetto.object_class))!="<class 'kivy.uix.label.Label'>": #HACK: see if there's a more generic way to do this (like using the graphical instruction class as reference)
+            current_canvas.canvas.remove(oggetto.object_class)
+        elif str(type(oggetto.object_class))=="<class 'kivy.uix.label.Label'>":
+            current_canvas.remove_widget(oggetto.object_class)
+    priority_value=0
+    list_length=len(current_list)
+    while list_length>0:
+        actual_index=0
+        while actual_index<len(current_list):
+            if current_list[actual_index].priority==priority_value:
+                if str(type(current_list[actual_index].object_class))!="<class 'kivy.uix.label.Label'>":
+                    current_canvas.canvas.add(current_list[actual_index].object_class)
+                elif str(type(current_list[actual_index].object_class))=="<class 'kivy.uix.label.Label'>":
+                    current_canvas.add_widget(current_list[actual_index].object_class)
+                current_list.remove(current_list[actual_index])
+                list_length=len(current_list)
+                actual_index-=1
+            actual_index+=1
+        priority_value+=1
