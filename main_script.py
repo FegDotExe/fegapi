@@ -3,6 +3,8 @@ import os, sys
 from re import search, sub, findall
 from inspect import getframeinfo, stack
 
+#TODO: enable importing from file
+
 class Logger():
     def __init__(self):
         main_path=os.path.dirname(stack()[1][1]).replace("\\", "/")+"/"
@@ -19,7 +21,8 @@ class DynamicObject():
     updated=False
     offset_pos=None
     active=True
-    def __init__(self,this_object,current_canvas,current_window=None,nickname=None,proportions=None,custom_size=None,custom_pos=None,offset_pos=None,on_touch=None,object_dict=None,link_with_existing=False,priority=0,custom_text_size=None):
+    custom_font_size=None
+    def __init__(self,this_object,current_canvas,current_window=None,nickname:str=None,proportions:str=None,custom_size:tuple=None,custom_pos:tuple=None,offset_pos:tuple=None,on_touch:dict=None,object_dict:dict=None,link_with_existing:bool=False,priority:int=0,custom_text_size:tuple=None,custom_font_size:str=None):
         """:param this_object: a kivy.graphics object
         :param current_canvas: the widget in which the object is
         :param current_window: the window in which the object is; is only used for updating the space when an object is linked to an already existing DynamicObject, so when link_with_existing is set to True
@@ -32,12 +35,12 @@ class DynamicObject():
         :param link_with_existing: a bool which determines if a brand new object should be created or instead if it should be linked to an already existing object in the list with the same nickname
         :param int priority: in which order the object is drawn. High values means object visible on the top
         :param custom_text_size: a tuple of functions which determine the size of the text of a kivy.uix.label.Label class. It is recommended to set kivy.uix.label.Label.strip to True
+        :param custom_font_size: a function which determines the size of the font of a kivy.uix.label.Label class
         """
         #TODO: make nicknames mandatory and unique
-        #TODO: add a way for labels to customize their text size
         normal_init=True
         if link_with_existing and nickname!=None:
-            existing_object=self.get_object_class(current_canvas,nickname=nickname)
+            existing_object=get_object_class(current_canvas,nickname=nickname)
             if existing_object!=None:
                 existing_object.object_class=this_object
                 current_canvas.canvas.add(this_object)
@@ -63,7 +66,7 @@ class DynamicObject():
             self.priority=priority if priority!=None else 0
             if str(type(self.object_class))=="<class 'kivy.uix.label.Label'>":
                 self.custom_text_size=custom_text_size if custom_text_size!=None else None
-            #TODO: also add a property for custom font size
+                self.custom_font_size=custom_font_size if custom_font_size!=None else None
 
             current_canvas.objects_list.append(self)
     
@@ -99,6 +102,8 @@ class DynamicObject():
             if self.custom_text_size[1]!=None:
                 text_size_y=eval(translate_function(self.custom_text_size[1],axis=1))
             self.object_class.text_size=(text_size_x,text_size_y)
+        if self.custom_font_size!=None:
+            self.object_class.font_size=eval(translate_function(self.custom_font_size))
         self.object_class.size=(size_x,size_y)
     def update_pos(self,current_canvas,current_window):
         pos_x=self.object_class.pos[0]
@@ -148,37 +153,6 @@ class DynamicObject():
                 output_value=self.on_touch[touch.button]["call"].replace("<self>","dynamicobject")
         return output_value
 
-    def get_object_ind_by_name(self,name,current_canvas):
-        """Get an object's index in a canvas' objects_list searching by its name. If no match is found, the returned value is -1"""
-        output_value=-1
-        i=0
-        for oggetto in current_canvas.objects_list:
-            if oggetto.nickname==name:
-                output_value=i
-            i+=1
-        return output_value
-    #BUG: No need to have this as part of the class
-    def get_object_class(self,current_canvas,current_window=None,nickname=None,space_update=False):
-        """Returns an object class, found by using the given parameters"""
-        output_value=None
-        if nickname!=None:
-            output_value=current_canvas.objects_list[self.get_object_ind_by_name(nickname,current_canvas)]
-        if space_update:
-            output_value.update_space(current_canvas,current_window)
-        return output_value
-
-    def remove_object(self,current_canvas,nickname=None,delete_from_list=False):
-        """Removes an object from the canvas. If delete_from_list is set as True, the object will be also removed from Widget.objects_list, leading to potential errors. If not removed, objects can later be re-linked, gaining the same properties as the actual class, but having a different kivy base object."""
-        if nickname!=None:
-            this_object=self.get_object_class(current_canvas,nickname=nickname)
-        else:
-            this_object=self
-        current_canvas.canvas.remove(this_object.object_class)
-        if delete_from_list:
-            current_canvas.objects_list.remove(self)
-        else:
-            self.active=False
-
 def convert_numeric_string(numeric_string:str,total_amount=0):
     """Converts a numeric string to a normal number.
     
@@ -217,13 +191,13 @@ def translate_function(this_function,axis=0):
     """Translates spacial instructions.
     
     $$center$$: requires axis index and returns a centered pos value for the given axis
+    $$center()$$: requires axis index and returns the center of the class given between parenthesys
     $$n/n$$: requires axis index and outputs the given fraction of the given axis
     $$extreme(class_object)$$: requires axis index and outputs the right/top border of the object
     
     <<object_nickname>>: refers to the object_class of the dynamic object with given nickname. You can also use <<self>> to refer to the current object
     $window$: automatically replaced with current_window"""
     #d_print(this_function)
-    #TODO: add a $$center()$$ function to refer to the center of another class
     output_value=this_function
     last_function=""
     while output_value!=last_function:
@@ -231,7 +205,7 @@ def translate_function(this_function,axis=0):
         last_function=output_value
         output_value=output_value.replace("§§","")
         output_value=output_value.replace("<<self>>","self.object_class")
-        output_value=sub("<<(.*)>>","self.get_object_class(current_canvas,current_window,nickname=\"\g<1>\",space_update=True).object_class",output_value)
+        output_value=sub("<<(.*)>>","get_object_class(current_canvas,current_window,nickname=\"\g<1>\",space_update=True).object_class",output_value)
         output_value=sub("\$\$extreme\((.*)\)\$\$","(\g<1>.size[%i]+\g<1>.pos[%i])"%(axis,axis),output_value)
         output_value=sub("\$\$center\((.*)\)\$\$","((\g<1>.size[%i]/2)+\g<1>.pos[%i])"%(axis,axis),output_value)
         output_value=output_value.replace("$$center$$","(current_window.size[%i]/2)-(self.object_class.size[%i]/2)"%(axis,axis)) if "$$center$$"in output_value else output_value
@@ -250,13 +224,41 @@ def function_add(base_function,value):
         output_value=sub("§§(\-?\d*)§§","§§%i§§"%(int(base_search)+value),output_value)
     return output_value
 
+def get_object_ind_by_name(name,current_canvas):
+    """Get an object's index in a canvas' objects_list searching by its name. If no match is found, the returned value is -1"""
+    output_value=-1
+    i=0
+    for oggetto in current_canvas.objects_list:
+        if oggetto.nickname==name:
+            output_value=i
+        i+=1
+    return output_value
+def get_object_class(current_canvas,current_window=None,nickname=None,space_update=False):
+    """Returns an object class, found by using the given parameters"""
+    output_value=None
+    if nickname!=None:
+        output_value=current_canvas.objects_list[get_object_ind_by_name(nickname,current_canvas)]
+    if space_update:
+        output_value.update_space(current_canvas,current_window)
+    return output_value
+def remove_object(current_canvas,nickname=None,object_class:DynamicObject=None,delete_from_list=False):
+    """Removes an object from the canvas. If delete_from_list is set as True, the object will be also removed from Widget.objects_list, leading to potential errors. If not removed, objects are temporarily deactivated (no size updates for efficiency reasons) and can later be re-linked, gaining the same properties as the actual class, but having a different kivy base object."""
+    if nickname!=None:
+        this_object=get_object_class(current_canvas,nickname=nickname)
+    elif object_class!=None:
+        this_object=object_class
+    current_canvas.canvas.remove(this_object.object_class)
+    if delete_from_list:
+        current_canvas.objects_list.remove(this_object)
+    else:
+        this_object.active=False
 def reorder_objects(current_canvas):
     """Updates all objects respecting their draw priority"""
     current_list=current_canvas.objects_list[:]
     for oggetto in current_list:
-        if str(type(oggetto.object_class))!="<class 'kivy.uix.label.Label'>": #HACK: see if there's a more generic way to do this (like using the graphical instruction class as reference)
+        if "kivy.uix" not in str(type(oggetto.object_class)):
             current_canvas.canvas.remove(oggetto.object_class)
-        elif str(type(oggetto.object_class))=="<class 'kivy.uix.label.Label'>":
+        elif "kivy.uix" in str(type(oggetto.object_class)):
             current_canvas.remove_widget(oggetto.object_class)
     priority_value=0
     list_length=len(current_list)
