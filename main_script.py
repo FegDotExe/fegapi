@@ -2,6 +2,7 @@ import logging
 import os, sys
 from re import search, sub, findall
 from inspect import getframeinfo, stack
+from json import load
 
 #TODO: enable importing from file
 
@@ -12,17 +13,10 @@ class Logger():
 
 class DynamicObject():
     """A class made to store Dynamic objects in an easy way."""
-    uid=None
-    object_class=None
-    nickname=None
-    custom_pos=None
-    custom_size=None
-    custom_text_size=None
     updated=False
-    offset_pos=None
     active=True
-    custom_font_size=None
-    def __init__(self,this_object,current_canvas,current_window=None,nickname:str=None,proportions:str=None,custom_size:tuple=None,custom_pos:tuple=None,offset_pos:tuple=None,on_touch:dict=None,object_dict:dict=None,link_with_existing:bool=False,priority:int=0,custom_text_size:tuple=None,custom_font_size:str=None):
+    priority=0
+    def __init__(self,this_object,current_canvas,**kwargs):
         """:param this_object: a kivy.graphics object
         :param current_canvas: the widget in which the object is
         :param current_window: the window in which the object is; is only used for updating the space when an object is linked to an already existing DynamicObject, so when link_with_existing is set to True
@@ -39,13 +33,13 @@ class DynamicObject():
         """
         #TODO: make nicknames mandatory and unique
         normal_init=True
-        if link_with_existing and nickname!=None:
-            existing_object=get_object_class(current_canvas,nickname=nickname)
+        if "link_with_existing" in kwargs and "nickname" in kwargs:
+            existing_object=get_object_class(current_canvas,nickname=kwargs["nickname"])
             if existing_object!=None:
                 existing_object.object_class=this_object
                 current_canvas.canvas.add(this_object)
                 existing_object.active=True
-                existing_object.update_space(current_canvas,current_window)
+                existing_object.update_space(current_canvas,kwargs["current_window"])
                 existing_object.updated=False
                 reorder_objects(current_canvas)
                 normal_init=False
@@ -54,19 +48,9 @@ class DynamicObject():
         else:
             normal_init=True
         if normal_init:
-            self.uid=this_object.uid
             self.object_class=this_object
-            self.nickname=nickname if nickname!=None else this_object.uid
-            self.proportions=proportions if proportions!=None else None
-            self.custom_pos=custom_pos if custom_pos!=None else None
-            self.offset_pos=offset_pos if offset_pos!=None else (None,None)
-            self.custom_size=custom_size if custom_size!=None else None
-            self.on_touch=on_touch if on_touch!=None else None
-            self.object_dict=object_dict if object_dict!=None else None
-            self.priority=priority if priority!=None else 0
-            if str(type(self.object_class))=="<class 'kivy.uix.label.Label'>":
-                self.custom_text_size=custom_text_size if custom_text_size!=None else None
-                self.custom_font_size=custom_font_size if custom_font_size!=None else None
+            for key in kwargs:
+                setattr(self, key, kwargs[key])
 
             current_canvas.objects_list.append(self)
     
@@ -84,17 +68,18 @@ class DynamicObject():
         size_y=self.object_class.size[1]
         
         #Determine custom size
-        if self.custom_size!=None:
+        #print(locals())
+        if "custom_size" in self.__dict__:#FIXME: this is the way to go
             if self.custom_size[0]!=None:
                 size_x=eval(translate_function(self.custom_size[0], axis=0))
             if self.custom_size[1]!=None:
                 size_y=eval(translate_function(self.custom_size[1], axis=1))
         #Reduce size according to proportions
-        if self.proportions!=None:
+        if "proportions" in self.__dict__:
             prop_size=convert_proportion_string(self.proportions,size_x,size_y)
             size_x=prop_size[0]
             size_y=prop_size[1]
-        if self.custom_text_size!=None:
+        if "custom_text_size" in self.__dict__:
             text_size_x=self.custom_text_size[0]
             text_size_y=self.custom_text_size[1]
             if self.custom_text_size[0]!=None:
@@ -102,21 +87,21 @@ class DynamicObject():
             if self.custom_text_size[1]!=None:
                 text_size_y=eval(translate_function(self.custom_text_size[1],axis=1))
             self.object_class.text_size=(text_size_x,text_size_y)
-        if self.custom_font_size!=None:
+        if "custom_font_size" in self.__dict__:
             self.object_class.font_size=eval(translate_function(self.custom_font_size))
         self.object_class.size=(size_x,size_y)
     def update_pos(self,current_canvas,current_window):
         pos_x=self.object_class.pos[0]
         pos_y=self.object_class.pos[1]
 
-        if self.custom_pos!=None:
+        if "custom_pos" in self.__dict__:
             if self.custom_pos[0]!=None:
                 self.custom_pos=(translate_function(self.custom_pos[0],axis=0),self.custom_pos[1])
                 pos_x=eval(self.custom_pos[0])
             if self.custom_pos[1]!=None:
                 self.custom_pos=(self.custom_pos[0],translate_function(self.custom_pos[1],axis=1))
                 pos_y=eval(self.custom_pos[1])
-        if self.offset_pos!=None:
+        if "offset_pos" in self.__dict__:
             if self.offset_pos[0]!=None:
                 pos_x=pos_x+eval(translate_function(self.offset_pos[0],axis=0))
             if self.offset_pos[1]!=None:
@@ -126,7 +111,7 @@ class DynamicObject():
 
     def was_touched(self,touch):
         """Returns a bool which tells if this object has been touched"""
-        if self.on_touch!=None:
+        if "on_touch" in self.__dict__:
             if touch.button in self.on_touch:
                 if str(type(self.object_class))=="<class 'kivy.graphics.vertex_instructions.Ellipse'>":
                     #FIXME: not working with angled shapes
@@ -152,6 +137,30 @@ class DynamicObject():
             if touch.button in self.on_touch:
                 output_value=self.on_touch[touch.button]["call"].replace("<self>","dynamicobject")
         return output_value
+
+class Importer():
+    """A class used to import DynamicObject classes from files"""
+    def __init__(self,current_canvas):
+        self.current_canvas=current_canvas
+        self.main_path=os.path.dirname(stack()[1][1]).replace("\\", "/")+"/"
+    def jread(self,relative_path):
+        with open(self.main_path+relative_path,encoding="utf-8") as fail:
+            data=load(fail)
+        return data
+    def from_file(self,relative_path,groups=[]):
+        """Imports DynamicObject classes from a json file located at a relative from the importing file. The current_canvas given in the __init__ of the function should have a function structured exactly like this:
+        
+        def return_function(self,function_string):
+            return eval(function_string)
+            
+        If any groups are specified, only the given groups will be imported.
+        
+        The syntax of the json should be: {"<group name>":{"kivy_obj":"<The kivy graphical object function>","kwargs":{<all the arguments>}}}"""
+        imported_dict=self.jread(relative_path)
+        for key in imported_dict:
+            if len(groups)==0 or key in groups:#TODO: make lists available in groups, so that you can do mass-imports by giving just one keyword
+                DynamicObject(self.current_canvas.return_function(imported_dict[key]["kivy_obj"]),self.current_canvas,**imported_dict[key]["kwargs"])
+
 
 def convert_numeric_string(numeric_string:str,total_amount=0):
     """Converts a numeric string to a normal number.
